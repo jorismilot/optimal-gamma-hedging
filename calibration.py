@@ -2,7 +2,7 @@ import pandas as pd
 import os
 import numpy as np
 
-class Pricing:
+class DataLoader:
     def __init__(self):
         self.data_dir = '/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/Data'
         self.coins = ['btc', 'eth']
@@ -72,6 +72,7 @@ class Pricing:
             # write CSV without index
             df_hour.to_csv(out_path, index=False)
 
+class CharacteristicFunction:
     # CALIBRATION METHODS
     def charact_func_merton(r,tau,muJ,sigmaJ,sigma, xi, S0):
         i   = np.complex(0.0,1.0)
@@ -85,12 +86,9 @@ class Pricing:
         return cf 
 
 
-
-
-
 if __name__ == "__main__":
     # Init
-    pricing = Pricing()
+    dataloader = DataLoader()
 
 
 
