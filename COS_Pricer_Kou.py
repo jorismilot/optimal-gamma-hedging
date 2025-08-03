@@ -52,26 +52,19 @@ def bs_vega(S0, K, sigma, tau, r):
     return S0 * st.norm.pdf(d1) * np.sqrt(tau)
 
 # --- COS Pricing Mechanism ---
-# TO DO CHECK THIS:
 def chf_kou(u, r, tau, theta):
     sigma, xi, alpha1, alpha2, p1 = theta
     p2 = 1 - p1
-
-
-    omega_bar = xi * (1 - (p1*alpha1)/(alpha1-1) - (1-p1)*alpha2/(alpha2+1))
+    omega_bar = xi * (1 - (p1*alpha1)/(alpha1-1) - (p2*alpha2)/(alpha2+1))
     mu = r - 0.5*sigma**2 + omega_bar
     return np.exp(i*u*mu*tau-0.5*sigma**2*u**2*tau + xi*tau*((p1*alpha1)/(alpha1 - i*u) + (p2*alpha2)/(alpha2 + i*u) - 1))
-
-def phi_kou(S0, K, r, tau_sec, theta):
-    return lambda u: np.exp(i*u*(np.log(S0) - np.log(K))) * chf_kou(u, r, tau_sec, theta)
-# ------------------------------------------------------
 
 def kou_cumulants(tau, r, theta):
     """ Calculate the cumulants for the Heston model. """
     sigma, xi, alpha1, alpha2, p1 = theta
     p2 = 1 - p1
-    omega_bar = xi * ((p1*alpha1)/(alpha1-1) + (p2*alpha2)/(alpha2+1) - 1)
-    c1 = tau * (r - omega_bar - 0.5 * sigma**2 + ((xi * p1)/alpha1 - (xi * p2)/alpha2))
+    omega_bar = xi * (1 - (p1*alpha1)/(alpha1-1) - (p2*alpha2)/(alpha2+1))
+    c1 = tau * (r + omega_bar - 0.5 * sigma**2 + ((xi * p1)/alpha1 - (xi * p2)/alpha2))
     c2 = tau * (sigma**2 + 2 * (xi * p1)/ alpha1**2 + 2 * (xi * p2)/alpha2**2)
     c4 = 24 * tau * xi * (p1 / alpha1**4 + p2 / alpha2**4) 
     return c1, c2, c4
@@ -118,9 +111,14 @@ def cos_pricer(CP, S0, K, tau, r, theta, N=512, L=10):
 # --- Calibration Mechanism ---
 MODEL_CFG = {
     'kou': (
-        np.array([0.35, 1.00, 6.00, 0.20, 0.30]),  # σ, ξ, α1, α2, p1
-        np.array([0.05, 0.00, 1.10, 0.05, 0.05]),
-        np.array([2.00, 3.00, 10.00, 5.00, 0.95])
+        # Initial Guess: [sigma, xi, alpha1, alpha2, p1]
+        np.array([0.75, 0.50, 10.0, 10.0, 0.50]),
+        
+        # Lower Bounds
+        np.array([0.10, 0.01, 1.01, 1.01, 0.01]), # Enforces alpha1 > 1 and alpha2 > 1
+        
+        # Upper Bounds
+        np.array([2.00, 5.00, 50.0, 50.0, 0.99])
     )
 }
 
@@ -200,7 +198,7 @@ if __name__ == '__main__':
 
     df_calib = pd.DataFrame(calib_out)
     
-    df_calib.to_csv('kou_calibration_results_final.csv', index=False)
+    df_calib.to_csv('/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Data/kou_calibration_results_final.csv', index=False)
     print("\n--- Final Calibration Finished ---")
     print("Results saved to 'kou_calibration_results_final.csv'")
     print(df_calib.head())
