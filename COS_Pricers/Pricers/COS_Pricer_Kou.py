@@ -115,15 +115,15 @@ MODEL_CFG = {
         np.array([0.75, 0.50, 10.0, 10.0, 0.50]),
         
         # Lower Bounds
-        np.array([0.10, 0.01, 1.01, 1.01, 0.01]), # Enforces alpha1 > 1 and alpha2 > 1
+        np.array([0.10, 4, 1.01, 1.01, 0.00]), # Enforces alpha1 > 1 and alpha2 > 1
         
         # Upper Bounds
-        np.array([2.00, 5.00, 50.0, 50.0, 0.99])
+        np.array([2.00, 25.00, 50.0, 50.0, 1.00])
     )
 }
 
 # Here used: Enhanced numerical stability
-def iv_newton(price, CP, S0, K, tau, r, sigma_init=0.5, tol=1e-10, it=40):
+def iv_newton(price, CP, S0, K, tau, r, sigma_init=0.5, tol=1e-10, it=500):
     sigma = np.full_like(price, sigma_init, dtype=float)
     for _ in range(it):
         diff = bs_price(CP, S0, K, sigma, tau, r) - price
@@ -168,7 +168,7 @@ if __name__ == '__main__':
     # Sort groups by date to ensure sequential processing
     grouped = sorted(list(btc.groupby(btc['timestamp'].dt.date)))
 
-    # --- CORRECTED: Sequential Calibration with Robust "Warm Starts" ---
+    # Sequential Calibration with Robust "Warm Starts"
     calib_out = []
     
     # Get the initial guess and bounds from config
@@ -195,10 +195,14 @@ if __name__ == '__main__':
                 result['theta_α2'],
                 result['theta_p1']
             ])
-
-    df_calib = pd.DataFrame(calib_out)
+        
+    # --- Save the final results to CSV files ---
+    output_path = '/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Data/'
+    os.makedirs(output_path, exist_ok=True)
     
-    df_calib.to_csv('/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Data/kou_calibration_results_final.csv', index=False)
+    # Save the summary of fits
+    df_calib = pd.DataFrame(calib_out)
+    df_calib.to_csv(os.path.join(output_path, 'kou_calibration_results_final.csv'), index=False)
     print("\n--- Final Calibration Finished ---")
     print("Results saved to 'kou_calibration_results_final.csv'")
     print(df_calib.head())
