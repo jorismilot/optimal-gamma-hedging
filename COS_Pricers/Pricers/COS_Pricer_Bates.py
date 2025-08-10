@@ -103,18 +103,16 @@ def cos_pricer(CP, S0, K, tau, r, theta, N=512, L=10):
     return prices.astype(float)
 
 # Calibration Mechanism 
-import numpy as np
-
 MODEL_CFG = {
     'bates': (
         # Parameters: [kappa, vbar, gamma, rho, v0, xi, muJ, sigmaJ]
-        # Heston Params: kappa, vbar, gamma, rho, v0; Jump Params: xi, muJ, sigmaJ
+        # Heston Params: kappa, vbar, gamma, rho, v0; Merton Params: xi, muJ, sigmaJ
         # Initial Guess
         np.array([2.0, 0.6, 0.5, -0.6, 0.6, 1.0, -0.10, 0.20]),
         # Lower Bounds
-        np.array([0.1, 0.01, 0.01, -0.99, 0.01, 0.0, -0.5, 0.01]),
+        np.array([0.1, 0.01, 0.01, -0.99, 0.01, 4.0, -0.5, 0.01]),
         # Upper Bounds
-        np.array([20.0, 2.0, 2.0, 0.99, 2.0, 10.0, 0.5, 0.6])
+        np.array([20.0, 2.0, 2.0, 0.99, 2.0, 45.0, 0.5, 0.6])
     )
 }
 
@@ -158,49 +156,72 @@ def calibrate_bates_snapshot(df_snap, theta_0, bounds, r=0.0):
             'message'   : res.message
         }     
 
-
 if __name__ == '__main__':
-    btc_raw = load_0dte_data()       
-    btc = filter_otm_calibration(btc_raw)
-    
-    # Sort groups by date to ensure sequential processing
+    btc_raw = load_0dte_data()
+    btc = filter_otm_calibration(btc_raw) # filter for ATM/OTM
     grouped = sorted(list(btc.groupby(btc['timestamp'].dt.date)))
 
-    # Sequential Calibration with Robust "Warm Starts"
-    calib_out = []
+    calib_summary = []
+    option_fits = []
 
-    # Get the initial guess and bounds from config with `theta_0` the starting point and fallback
     theta_0, lb, ub = MODEL_CFG['bates']
     bounds = list(zip(lb, ub))
 
     print("Starting sequential calibration with robust warm starts...")
-    for date, snap in tqdm(grouped, desc='Calibrating per-day Bates', unit='day'):        
+    for date, snap in tqdm(grouped, desc='Calibrating per-day bates', unit='day'):
+        # Calibrate the bates model for the current snapshot
         result = calibrate_bates_snapshot(snap, theta_0, bounds)
+        calib_summary.append(result)
 
-        # Append the results to our list
-        calib_out.append(result)
-        
-        # Update the initial guess for the next day only if this run succeeded -> if failed, reuse the same `theta_0` for the next day.
+        # If the calibration for the day was successful, calculate and store detailed results
         if result['success']:
-            theta_0 = np.array([
-                result['theta_kappa'], 
-                result['theta_vbar'], 
-                result['theta_gamma'], 
+            # Reconstruct the optimal theta vector from the result dictionary
+            theta_opt = np.array([
+                result['theta_kappa'],
+                result['theta_vbar'],
+                result['theta_gamma'],
                 result['theta_rho'],
                 result['theta_v0'],
                 result['theta_xi'],
                 result['theta_muJ'],
                 result['theta_sigmaJ']
             ])
-        
-    
-     # --- Save the final results to CSV files ---
+
+            # Extract inputs and get fits 
+            CP, S0, K, tau, _, iv_mkt = extract_inputs_from_df(snap)
+            fitted_price = cos_pricer(CP, S0[0], K, tau, r=0.0, theta=theta_opt)
+            fitted_iv = iv_newton(fitted_price, CP, S0[0], K, tau, r=0.0, sigma_init=iv_mkt)
+
+            # Create a copy of the day's snapshot and add the new columns
+            detailed_snap = snap.copy()
+            detailed_snap['fitted_price'] = fitted_price
+            detailed_snap['fitted_iv'] = fitted_iv
+            detailed_snap['SE_fitted'] = (fitted_iv - iv_mkt)**2
+
+            option_fits.append(detailed_snap)
+
+            # Update the initial guess for the next day (warm start)
+            theta_0 = theta_opt
+
+    # Save the final results to CSV files 
     output_path = '/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Data/'
     os.makedirs(output_path, exist_ok=True)
-    
-    # Save the summary of fits
-    df_calib = pd.DataFrame(calib_out)
-    df_calib.to_csv(os.path.join(output_path, 'bates_calibration_results_final.csv'), index=False)
-    print("\n--- Final Calibration Finished ---")
-    print("Results saved to 'bates_calibration_results_final.csv'")
-    print(df_calib.head())
+
+    # Save the summary of fits (same as your original code)
+    df_calib_summary = pd.DataFrame(calib_summary)
+    summary_filepath = os.path.join(output_path, 'Calibration', 'bates_calibration_summary.csv')
+    df_calib_summary.to_csv(summary_filepath, index=False)
+    print(f"\n--- Calibration Summary Finished ---")
+    print(f"Summary results saved to '{summary_filepath}'")
+    print(df_calib_summary.head())
+
+    # Concatenate all the detailed daily results into a single DataFrame
+    if option_fits:
+        df_detailed_fits = pd.concat(option_fits, ignore_index=True)
+        detailed_filepath = os.path.join(output_path, 'Options', 'bates_per_option_fits.csv')
+        df_detailed_fits.to_csv(detailed_filepath, index=False)
+        print(f"\n--- Detailed Fits Finished ---")
+        print(f"Per-option results saved to '{detailed_filepath}'")
+        print(df_detailed_fits.head())
+    else:
+        print("\nNo successful calibrations to generate detailed fits.")

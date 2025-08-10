@@ -50,6 +50,7 @@ def bs_vega(S0, K, sigma, tau, r):
 # COS Pricing Mechanism for Heston 
 def chf_heston(u, tau, r, theta):
     v0, v_bar, kappa, gamma, rho = theta
+    kappa = 0.5 # Fix kappa
     d = np.sqrt(np.power(kappa-gamma*rho*i*u,2)+(u**2+i*u)*gamma**2)
     g  = (kappa-gamma*rho*i*u-d)/(kappa-gamma*rho*i*u+d)
     C  = (1.0-np.exp(-d*tau))/(gamma*gamma*(1.0-g*np.exp(-d*tau)))\
@@ -57,7 +58,7 @@ def chf_heston(u, tau, r, theta):
 
     # Note that we exclude the term -r*tau, as the discounting is performed in the COS method
     A  = r * i*u *tau + kappa*v_bar*tau/gamma/gamma *(kappa-gamma*rho*i*u-d)\
-        - 2*kappa*v_bar/gamma/gamma*np.log((1.0-g*np.exp(-d*tau))/(1.0-g))
+        - 2*kappa*v_bar/gamma/gamma * (np.log1p(-g*np.exp(-d*tau)) - np.log1p(-g))
 
     return np.exp(A + C*v0) 
 
@@ -84,21 +85,20 @@ def payoff_coefficients_vec(CP, k, a, b):
     return H_k
 
 # Heston COS pricer
-def cos_pricer(CP, S0, K, tau, r, theta, N=512, L=10):
+def cos_pricer(CP, S0, K, tau, r, theta, N=256, L=10):
     K, tau, CP = np.asarray(K), np.asarray(tau), np.asarray(CP)
     log_ratio  = np.log(S0 / K)
     
-    a = (0 - L*np.sqrt(tau))[None, :] # TO DO: SHOULD THIS BE 0 OR log_ratio?
-    b = (0 + L*np.sqrt(tau))[None, :] # TO DO: SHOULD THIS BE 0 OR log_ratio?
+    a = (log_ratio - L*np.sqrt(tau))[None, :] # TO DO: SHOULD THIS BE 0 OR log_ratio?
+    b = (log_ratio + L*np.sqrt(tau))[None, :] # TO DO: SHOULD THIS BE 0 OR log_ratio?
     
     k = np.arange(N, dtype=float)[:, None]
     u = k * np.pi / (b - a)
     
-    phi_log_price = chf_heston(u, tau, r, theta)
-    phi_log_return = phi_log_price * np.exp(-1j * u * np.log(S0))
+    phi = chf_heston(u, tau, r, theta)
 
     H_k = payoff_coefficients_vec(CP[None, :], k, a, b)
-    w = np.real(phi_log_return * np.exp(-1j * u * (a - log_ratio[None, :])))
+    w = np.real(phi * np.exp(-1j * u * (a - log_ratio)))
     w[0, :] *= 0.5
     
     prices = np.exp(-r * tau) * K * np.sum(w * H_k, axis=0)
@@ -108,12 +108,12 @@ def cos_pricer(CP, S0, K, tau, r, theta, N=512, L=10):
 # Calibration Mechanism 
 MODEL_CFG = {
     'heston': (
-        np.array([0.6, 0.64, 2.0, 0.5, -0.7]),  # initial guess
-        np.array([0.001, 0.001, 0.01, 0.05, -0.999]),  # lower bounds
-        np.array([5.0,   5.0,   15.0, 5.0,   0.999])   # upper bounds
+        # Parameters: [v0, v_bar, kappa, gamma, rho] # Skip kappa as it has the same effect as gamma
+        np.array([2.00, 2.00, 0.3, 0.5, -0.25]),  # initial guess
+        np.array([0.001, 0.01, 0.01, 3, -0.999]),  # lower bounds
+        np.array([3.0,   7.0, 12.0, 15,  0.00])   # upper bounds
     )
 }
-
 def iv_newton(price, CP, S0, K, tau, r, sigma_init=0.5, tol=1e-10, it=300):
     sigma = np.full_like(price, sigma_init, dtype=float)
     for _ in range(it):
@@ -129,7 +129,7 @@ def rmse_iv(S0, K, tau, CP, iv_mkt, theta, r=0.0):
     try:
         pr_model = cos_pricer(CP, S0, K, tau, r, theta)
         if np.any(~np.isfinite(pr_model)):
-            return 1e6  # Bad price → penalise heavily
+            return 1e6  # Bad price 
 
         iv_model = iv_newton(pr_model, CP, S0, K, tau, r,
                              sigma_init=np.nan_to_num(iv_mkt, nan=0.5))
@@ -141,71 +141,110 @@ def rmse_iv(S0, K, tau, CP, iv_mkt, theta, r=0.0):
         return 1e6
 
 
-def calibrate_heston_snapshot(df_snap, theta_0, bounds, r=0.0):
+def calibrate_heston_snapshot(df_snap, v0_fixed, theta_0_remaining, bounds_remaining, r=0.0):
     CP, S0_vec, K, tau, _, iv_mkt = extract_inputs_from_df(df_snap)
     S0 = float(S0_vec[0])
-    def penalised_loss(th):
-        # Base RMSE
-        base_loss = rmse_iv(S0, K, tau, CP, iv_mkt, th, r)
-        # Soft Feller condition penalty
-        v0, v_bar, kappa, gamma, rho = th
-        feller_violation = max(0.0, gamma**2 - 2*kappa*min(v0, v_bar))
-        return base_loss + 1e3 * feller_violation**2
+    
+    # Quick helper
+    def objective_for_optim(theta_remaining):
+        theta_full = np.insert(theta_remaining, 0, v0_fixed)
+        return rmse_iv(S0, K, tau, CP, iv_mkt, theta_full, r)
 
-    loss = penalised_loss
-    res  = optimize.minimize(loss, theta_0, bounds=bounds, method='L-BFGS-B', options={'ftol': 1e-8, 'maxiter': 500})
+    # Run the optimization on the remaining parameters
+    res = optimize.minimize(
+        objective_for_optim, 
+        theta_0_remaining, 
+        bounds=bounds_remaining, 
+        method='L-BFGS-B', 
+        options={'ftol': 1e-8, 'maxiter': 500}
+    )
+
     return {
-        'date'      : pd.to_datetime(df_snap['timestamp'].iloc[0]).date(),
-        'model'     : 'heston',
-        'theta_v0'  : res.x[0], 'theta_v_bar': res.x[1], 'theta_kappa': res.x[2], 'theta_gamma': res.x[3], 'theta_rho': res.x[4],
-        'iv_rmse'   : res.fun, 
-        'n_strk'    : len(df_snap), 
-        'success'   : res.success, 
-        'message'   : res.message
+        'date'        : pd.to_datetime(df_snap['timestamp'].iloc[0]).date(),
+        'model'       : 'heston_fixed_v0',
+        'theta_v0'    : v0_fixed,  # The fixed v0
+        'theta_v_bar' : res.x[0],  # Optimal v_bar
+        'theta_kappa' : res.x[1],      # Fixed kappa
+        'theta_gamma' : res.x[2],  # Optimal gamma
+        'theta_rho'   : res.x[3],  # Optimal rho
+        'iv_rmse'     : res.fun, 
+        'n_strk'      : len(df_snap), 
+        'success'     : res.success, 
+        'message'     : res.message
     }
 
-# Main Execution Block
 if __name__ == '__main__':
-    btc_raw = load_0dte_data()       
+    btc_raw = load_0dte_data()
     btc = filter_otm_calibration(btc_raw)
-    
-    # Sort groups by date to ensure sequential processing
     grouped = sorted(list(btc.groupby(btc['timestamp'].dt.date)))
 
-    # Sequential Calibration with Robust "Warm Starts"
-    calib_out = []
+    calib_summary = []
+    option_fits = []
 
-    # Get the initial guess and bounds from config with `theta_0` the starting point and fallback
-    theta_0, lb, ub = MODEL_CFG['heston']
-    bounds = list(zip(lb, ub))
+    # Initial guess for all params: [v0, v_bar, gamma, rho]
+    theta_full_0, lb_full, ub_full = MODEL_CFG['heston']
+    
+    # We will optimize [v_bar, gamma, rho]
+    theta_0_remaining = theta_full_0[1:] 
+    bounds_remaining = list(zip(lb_full, ub_full))[1:]
 
-    print("Starting sequential Heston calibration with robust warm starts...")
-    for date, snap in tqdm(grouped, desc='Calibrating per-day Heston', unit='day'):
-        result = calibrate_heston_snapshot(snap, theta_0, bounds)
-
-        # Append the results to our list
-        calib_out.append(result)
+    print("Starting sequential calibration with fixed v0 from ATM IV...")
+    for date, snap in tqdm(grouped, desc='Calibrating per-day heston', unit='day'):
         
-        # Update the initial guess for the next day only if this run succeeded -> if failed, reuse the same `theta_0` for the next day.
+        # Find ATM IV and set fixed v0 
+        atm_option_idx = snap['moneyness'].abs().idxmin()
+        atm_iv = snap.loc[atm_option_idx, 'mark_iv'] / 100.0
+        v0_fixed = atm_iv**2
+        
+        # Calibrate with the fixed v0 
+        result = calibrate_heston_snapshot(snap, v0_fixed, theta_0_remaining, bounds_remaining)
+        calib_summary.append(result)
+
+        # Process results
         if result['success']:
-            theta_0 = np.array([
-                result['theta_v0'], 
-                result['theta_v_bar'], 
+            # 1. Reconstruct the optimal full theta vector from the result dictionary
+            theta_opt_full = np.array([
+                result['theta_v0'],    # The fixed v0
+                result['theta_v_bar'],
                 result['theta_kappa'], 
-                result['theta_gamma'],
+                result['theta_gamma'], # Note: your chf_heston uses kappa=0.5, this is vol-of-vol
                 result['theta_rho']
             ])
-        else:
-            # Fallback to some “safe” middle guess if failure
-            theta_0 = MODEL_CFG['heston'][0]
 
-     # --- Save the final results to CSV files ---
+            # Extract inputs and get fits 
+            CP, S0, K, tau, _, iv_mkt = extract_inputs_from_df(snap)
+            fitted_price = cos_pricer(CP, S0[0], K, tau, r=0.0, theta=theta_opt_full)
+            fitted_iv = iv_newton(fitted_price, CP, S0[0], K, tau, r=0.0, sigma_init=iv_mkt)
+
+            # Create a copy and store detailed results
+            detailed_snap = snap.copy()
+            detailed_snap['fitted_price'] = fitted_price
+            detailed_snap['fitted_iv'] = fitted_iv
+            detailed_snap['SE_fitted'] = (fitted_iv - iv_mkt)**2
+            option_fits.append(detailed_snap)
+
+            # Update the initial guess for the NEXT day's remaining parameters, i.e. warm start
+            theta_0_remaining = theta_opt_full[1:]
+
+    # Save the final results to CSV files 
     output_path = '/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Data/'
     os.makedirs(output_path, exist_ok=True)
-    
-    # Save the summary of fits
-    df_calib = pd.DataFrame(calib_out)
-    df_calib.to_csv(os.path.join(output_path, 'heston_calibration_results_final.csv'), index=False)
-    print("\n--- Final Calibration Finished ---")
-    print("Results saved to 'heston_calibration_results_final.csv'")
-    print(df_calib.head())
+
+    # Save the summary of fits (same as your original code)
+    df_calib_summary = pd.DataFrame(calib_summary)
+    summary_filepath = os.path.join(output_path, 'Calibration', 'heston_calibration_summary.csv')
+    df_calib_summary.to_csv(summary_filepath, index=False)
+    print(f"\n--- Calibration Summary Finished ---")
+    print(f"Summary results saved to '{summary_filepath}'")
+    print(df_calib_summary.head())
+
+    # Concatenate all the detailed daily results into a single DataFrame
+    if option_fits:
+        df_detailed_fits = pd.concat(option_fits, ignore_index=True)
+        detailed_filepath = os.path.join(output_path, 'Options', 'heston_per_option_fits.csv')
+        df_detailed_fits.to_csv(detailed_filepath, index=False)
+        print(f"\n--- Detailed Fits Finished ---")
+        print(f"Per-option results saved to '{detailed_filepath}'")
+        print(df_detailed_fits.head())
+    else:
+        print("\nNo successful calibrations to generate detailed fits.")

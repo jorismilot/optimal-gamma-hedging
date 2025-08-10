@@ -5,6 +5,8 @@ import os
 import scipy.stats as st
 import scipy.optimize as optimize
 from tqdm import tqdm  
+from joblib import Parallel, delayed
+
 i = 1j    # imag unit
 
 def load_0dte_data(file_path='/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/Data/calibration_data/08/btc_08_0dte_data.csv'):
@@ -59,7 +61,7 @@ def chf_merton(u, r, tau, theta):
 def merton_cumulants(tau, r, theta):
     sigma, xi, muJ, sigmaJ = theta
     omega_bar = xi * (np.exp(muJ + 0.5 * sigmaJ**2) - 1)
-    c1 = tau * (r - omega_bar - 0.5 * sigma**2 + xi * muJ)
+    c1 = tau * (r - omega_bar - 0.5 * sigma**2 - xi * muJ)
     c2 = tau * (sigma**2 + xi * (muJ**2 + sigmaJ**2))
     c4 = tau * xi * (muJ**4 + 6 * muJ**2 * sigmaJ**2 + 3 * sigmaJ**4 * xi)
     return c1, c2, c4
@@ -106,15 +108,15 @@ def cos_pricer(CP, S0, K, tau, r, theta, N=512, L=10):
 MODEL_CFG = {
     'merton': (
         # Initial Guess [sigma, xi, muJ, sigmaJ]
-        np.array([0.70, 5.00, -0.30, 0.10]),
+        np.array([0.70, 15.00, -0.20, 0.10]),
         # Lower Bounds
-        np.array([0.4, 3.00, -2.00, 0.00]),
+        np.array([0.4, 10.00, -0.70, 0.00]),
         # Upper Bounds
-        np.array([1.70, 25.00,  0.50, 0.40])
+        np.array([2.00, 45.00,  0.50, 0.25])
     )
 }
 
-def iv_newton(price, CP, S0, K, tau, r, sigma_init=0.5, tol=1e-10, it=500):
+def iv_newton(price, CP, S0, K, tau, r, sigma_init=0.5, tol=1e-10, it=300):
     sigma = np.full_like(price, sigma_init, dtype=float)
     for _ in range(it):
         diff = bs_price(CP, S0, K, sigma, tau, r) - price
@@ -143,56 +145,79 @@ def calibrate_merton_snapshot(df_snap, theta_0, bounds, r=0.0):
     res  = optimize.minimize(loss, theta_0,
                              bounds=bounds,
                              method='L-BFGS-B',
-                             options={'ftol': 1e-8, 'maxiter': 500})
+                             options={'ftol': 1e-8, 'maxiter': 300})
     return {
             'date'      : pd.to_datetime(df_snap['timestamp'].iloc[0]).date(),
             'model'     : 'merton',
-            'theta_σ'   : res.x[0], 'theta_ξ': res.x[1], 'theta_μJ': res.x[2], 'theta_σJ': res.x[3],
+            'theta_sigma'   : res.x[0], 'theta_xi': res.x[1], 'theta_muJ': res.x[2], 'theta_sigmaJ': res.x[3],
             'iv_rmse'   : res.fun,
             'n_strk'    : len(snap),
             'success'   : res.success,
             'message'   : res.message
         }     
 
-
 if __name__ == '__main__':
-    btc_raw = load_0dte_data()       
-    btc = filter_otm_calibration(btc_raw)
-    
-    # Sort groups by date to ensure sequential processing
+    btc_raw = load_0dte_data()
+    btc = filter_otm_calibration(btc_raw) # filter for ATM/OTM
     grouped = sorted(list(btc.groupby(btc['timestamp'].dt.date)))
 
-    # Sequential Calibration with Robust "Warm Starts"
-    calib_out = []
+    calib_summary = []
+    option_fits = []
 
-    # Get the initial guess and bounds from config with `theta_0` the starting point and fallback
     theta_0, lb, ub = MODEL_CFG['merton']
     bounds = list(zip(lb, ub))
 
     print("Starting sequential calibration with robust warm starts...")
-    for date, snap in tqdm(grouped, desc='Calibrating per-day Merton', unit='day'):        
+    for date, snap in tqdm(grouped, desc='Calibrating per-day Merton', unit='day'):
+        # Calibrate the Merton model for the current snapshot
         result = calibrate_merton_snapshot(snap, theta_0, bounds)
+        calib_summary.append(result)
 
-        # Append the results to our list
-        calib_out.append(result)
-        
-        # Update the initial guess for the next day only if this run succeeded -> if failed, reuse the same `theta_0` for the next day.
+        # If the calibration for the day was successful, calculate and store detailed results
         if result['success']:
-            theta_0 = np.array([
-                result['theta_σ'], 
-                result['theta_ξ'], 
-                result['theta_μJ'], 
-                result['theta_σJ']
+            # 1. Reconstruct the optimal theta vector from the result dictionary
+            theta_opt = np.array([
+                result['theta_sigma'],
+                result['theta_xi'],
+                result['theta_muJ'],
+                result['theta_sigmaJ']
             ])
-        
-    
-     # --- Save the final results to CSV files ---
+
+            # Extract inputs and get fits 
+            CP, S0, K, tau, _, iv_mkt = extract_inputs_from_df(snap)
+            fitted_price = cos_pricer(CP, S0[0], K, tau, r=0.0, theta=theta_opt)
+            fitted_iv = iv_newton(fitted_price, CP, S0[0], K, tau, r=0.0, sigma_init=iv_mkt)
+
+            # Create a copy of the day's snapshot and add the new columns
+            detailed_snap = snap.copy()
+            detailed_snap['fitted_price'] = fitted_price
+            detailed_snap['fitted_iv'] = fitted_iv
+            detailed_snap['SE_fitted'] = (fitted_iv - iv_mkt)**2
+
+            option_fits.append(detailed_snap)
+
+            # Update the initial guess for the next day (warm start)
+            theta_0 = theta_opt
+
+    # Save the final results to CSV files 
     output_path = '/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Data/'
     os.makedirs(output_path, exist_ok=True)
-    
-    # Save the summary of fits
-    df_calib = pd.DataFrame(calib_out)
-    df_calib.to_csv(os.path.join(output_path, 'merton_calibration_results_final2.csv'), index=False)
-    print("\n--- Final Calibration Finished ---")
-    print("Results saved to 'merton_calibration_results_final.csv'")
-    print(df_calib.head())
+
+    # Save the summary of fits (same as your original code)
+    df_calib_summary = pd.DataFrame(calib_summary)
+    summary_filepath = os.path.join(output_path, 'Calibration', 'merton_calibration_summary.csv')
+    df_calib_summary.to_csv(summary_filepath, index=False)
+    print(f"\n--- Calibration Summary Finished ---")
+    print(f"Summary results saved to '{summary_filepath}'")
+    print(df_calib_summary.head())
+
+    # Concatenate all the detailed daily results into a single DataFrame
+    if option_fits:
+        df_detailed_fits = pd.concat(option_fits, ignore_index=True)
+        detailed_filepath = os.path.join(output_path, 'Options', 'merton_per_option_fits.csv')
+        df_detailed_fits.to_csv(detailed_filepath, index=False)
+        print(f"\n--- Detailed Fits Finished ---")
+        print(f"Per-option results saved to '{detailed_filepath}'")
+        print(df_detailed_fits.head())
+    else:
+        print("\nNo successful calibrations to generate detailed fits.")

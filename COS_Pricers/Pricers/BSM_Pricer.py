@@ -25,6 +25,20 @@ def load_0dte_data(hour='08'):
     eth_df['timestamp'] = pd.to_datetime(eth_df['timestamp'], utc=True)
     return btc_df, eth_df
 
+def filter_otm_calibration(df):
+    """Filters a dataframe to keep only ATM/OTM options and remove duplicate strikes."""
+    # Ensure 'moneyness' is calculated
+    if 'moneyness' not in df.columns:
+        df['moneyness'] = np.log(df['strike'] / df['spot'])
+
+    mask = ((df['opt_type'] == 'call') & (df['moneyness'] >= 0)) | \
+           ((df['opt_type'] == 'put') & (df['moneyness'] <= 0))
+    df_filtered = df[mask].copy()
+
+    # Drop duplicates for any given strike on the same day
+    df_filtered.drop_duplicates(subset=['timestamp', 'strike'], keep='first', inplace=True)
+    return df_filtered
+
 def extract_inputs_from_df(df):
     return (
         df['opt_type'].values,
@@ -76,7 +90,7 @@ def calibrate_bsm_snapshot(df_snap):
 
     return {
         'model':   'bsm',
-        'theta':   res.x,
+        'theta_sigma':   res.x,
         'iv_rmse': res.fun,
         'n_strk':  len(df_snap),
         'success': res.success,
@@ -84,61 +98,65 @@ def calibrate_bsm_snapshot(df_snap):
     }
 
 if __name__ == '__main__':
-    df_btc, _ = load_0dte_data('08')
-    df_btc    = df_btc.dropna(subset=['mark_price', 'mark_iv'])
+    btc_raw = load_0dte_data()[0]
+    btc = filter_otm_calibration(btc_raw.dropna(subset=['mark_iv', 'mark_price']))
+    grouped = sorted(list(btc.groupby(btc['timestamp'].dt.date)))
 
-    # Pre-calculate columns needed for the filter 
-    df_btc['moneyness'] = np.log(df_btc['strike'] / df_btc['spot'])
-    df_btc['date'] = df_btc['timestamp'].dt.date
-    
-    # Apply the filter to the entire dataframe before looping
-    df_btc_filtered = calibration_filter(df_btc)
+    # Initialize Result Lists
+    calib_summary = []
+    option_fits = []
 
-    fits, option_frames = [], []
-    skip = 0
+    print("Starting BSM calibration...")
+    for date, snap in tqdm(grouped, desc='Calibrating BSM per-day'):
+        # Calibrate Snapshot and Store Summary 
+        result = calibrate_bsm_snapshot(snap)
+        # Add the date to the summary dictionary before appending
+        result_with_date = {'date': date, **result}
+        calib_summary.append(result_with_date)
 
-    # Group by the new 'date' column
-    for date, df_day in tqdm(df_btc_filtered.groupby('date'), desc="Calibrating BSM per day"):
-        if df_day['strike'].nunique() < 8:
-            print(f'Skip {date}: only {df_day.strike.nunique()} strikes')
-            skip += 1
-            continue
+        # Calculate Detailed Fits if Successful
+        if result['success']:
+            sigma_opt = result['theta_sigma']
 
-        # Shared arrays for this snapshot 
-        CP, S0v, K, tau_sec, _, iv_mkt = extract_inputs_from_df(df_day)
-        S0 = float(S0v[0])
+            # Extract inputs needed for pricing
+            CP, S0_vec, K, tau_sec, _, iv_mkt = extract_inputs_from_df(snap)
+            S0 = S0_vec[0]
 
-        fit = calibrate_bsm_snapshot(df_day)
-        fits.append({'date': date, **fit})
+            # Calculate fitted prices and IVs
+            fitted_price = bs_price(CP, S0, K, sigma_opt, tau_sec, r=0.0)
+            fitted_iv = np.full_like(iv_mkt, sigma_opt)
 
-        theta = fit['theta']
+            # Add results to a copy of the day's snapshot
+            detailed_snap = snap.copy()
+            detailed_snap['fitted_price'] = fitted_price
+            detailed_snap['fitted_iv'] = fitted_iv
+            detailed_snap['SE_fitted'] = (fitted_iv - iv_mkt)**2
+            option_fits.append(detailed_snap)
 
-        # Model prices & IV 
-        sigma_ = float(theta[0])
-        price_mod = bs_price(CP, S0, K, sigma_, tau_sec, 0.0)
-        iv_mod    = np.full_like(iv_mkt, sigma_)
+    # Save Results to CSV 
+    output_path = '/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Data/'
+    os.makedirs(os.path.join(output_path, 'Calibration'), exist_ok=True)
+    os.makedirs(os.path.join(output_path, 'Options'), exist_ok=True)
 
-        enriched = df_day.copy()
-        enriched['model']        = 'BSM'
-        enriched['price_model']  = price_mod
-        enriched['iv_model']     = iv_mod
-        enriched['iv_abs_err']   = np.abs(iv_mod - iv_mkt)
-
-    if fits: # Ensure there is something to save
-        df_fits = pd.DataFrame(fits)
-
-        # Define the output path
-        output_path = '/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Data/'
-        
-        # Create the directory if it doesn't exist
-        os.makedirs(output_path, exist_ok=True)
-        
-        # Save the DataFrames to CSV files
-        df_fits.to_csv(os.path.join(output_path, 'bsm_calibration_results_final.csv'), index=False)
-
-        print(f"\n--- BSM Calibration Finished ---")
-        print(f"Fit results saved to {os.path.join(output_path, 'bsm_calibration_results_final.csv')}")
-        print("\n--- Fit Results (first rows) ---")
-        print(df_fits.head())
+    # Save summary results
+    if calib_summary:
+        df_calib_summary = pd.DataFrame(calib_summary)
+        summary_filepath = os.path.join(output_path, 'Calibration', 'bsm_calibration_summary.csv')
+        df_calib_summary.to_csv(summary_filepath, index=False)
+        print("\n--- Calibration Summary Finished ---")
+        print(f"Summary results saved to '{summary_filepath}'")
+        print(df_calib_summary.head())
     else:
-        print("No data was calibrated. Output files not created.")
+        print("\nNo summary results to save.")
+
+    # Save detailed per-option fits
+    if option_fits:
+        df_detailed_fits = pd.concat(option_fits, ignore_index=True)
+        detailed_filepath = os.path.join(output_path, 'Options', 'bsm_per_option_fits.csv')
+        df_detailed_fits.to_csv(detailed_filepath, index=False)
+        print("\n--- Detailed Fits Finished ---")
+        print(f"Per-option results saved to '{detailed_filepath}'")
+        print(df_detailed_fits.head())
+    else:
+        print("\nNo successful calibrations to generate detailed fits.")
+

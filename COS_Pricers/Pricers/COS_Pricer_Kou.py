@@ -60,7 +60,7 @@ def chf_kou(u, r, tau, theta):
     return np.exp(i*u*mu*tau-0.5*sigma**2*u**2*tau + xi*tau*((p1*alpha1)/(alpha1 - i*u) + (p2*alpha2)/(alpha2 + i*u) - 1))
 
 def kou_cumulants(tau, r, theta):
-    """ Calculate the cumulants for the Heston model. """
+    """ Calculate the cumulants for the Kou model. """
     sigma, xi, alpha1, alpha2, p1 = theta
     p2 = 1 - p1
     omega_bar = xi * (1 - (p1*alpha1)/(alpha1-1) - (p2*alpha2)/(alpha2+1))
@@ -112,13 +112,13 @@ def cos_pricer(CP, S0, K, tau, r, theta, N=512, L=10):
 MODEL_CFG = {
     'kou': (
         # Initial Guess: [sigma, xi, alpha1, alpha2, p1]
-        np.array([0.75, 0.50, 10.0, 10.0, 0.50]),
+        np.array([0.75, 0.50, 20.0, 10.0, 0.50]),
         
         # Lower Bounds
-        np.array([0.10, 4, 1.01, 1.01, 0.00]), # Enforces alpha1 > 1 and alpha2 > 1
+        np.array([0.10, 25, 1.01, 1.01, 0.00]), # Enforces alpha1 > 1 and alpha2 > 1
         
         # Upper Bounds
-        np.array([2.00, 25.00, 50.0, 50.0, 1.00])
+        np.array([2.00, 60.00, 50.0, 50.0, 1.00])
     )
 }
 
@@ -154,7 +154,7 @@ def calibrate_kou_snapshot(df_snap, theta_0, bounds, r=0.0):
     return {
         'date'      : pd.to_datetime(df_snap['timestamp'].iloc[0]).date(),
         'model'     : 'kou',
-        'theta_σ'   : res.x[0], 'theta_ξ': res.x[1], 'theta_α1': res.x[2], 'theta_α2': res.x[3], 'theta_p1': res.x[4],
+        'theta_sigma'   : res.x[0], 'theta_xi': res.x[1], 'theta_alpha1': res.x[2], 'theta_alpha2': res.x[3], 'theta_p1': res.x[4],
         'iv_rmse'   : res.fun,
         'n_strk'    : len(df_snap),
         'success'   : res.success,
@@ -162,47 +162,68 @@ def calibrate_kou_snapshot(df_snap, theta_0, bounds, r=0.0):
     }
 
 if __name__ == '__main__':
-    btc_raw = load_0dte_data() # Reads 'btc_08_0dte_data.csv' by default         
-    btc = filter_otm_calibration(btc_raw)
-    
-    # Sort groups by date to ensure sequential processing
+    btc_raw = load_0dte_data()
+    btc = filter_otm_calibration(btc_raw) # filter for ATM/OTM
     grouped = sorted(list(btc.groupby(btc['timestamp'].dt.date)))
 
-    # Sequential Calibration with Robust "Warm Starts"
-    calib_out = []
-    
-    # Get the initial guess and bounds from config
-    # This `theta_0` will be our starting point and fallback
+    calib_summary = []
+    option_fits = []
+
     theta_0, lb, ub = MODEL_CFG['kou']
     bounds = list(zip(lb, ub))
 
     print("Starting sequential calibration with robust warm starts...")
-    for date, snap in tqdm(grouped, desc='Calibrating per-day Kou', unit='day'):
-        # `theta_0` is the initial guess for this iteration.
-        # It's either the default or the result from the last successful run.
+    for date, snap in tqdm(grouped, desc='Calibrating per-day kou', unit='day'):
+        # Calibrate the kou model for the current snapshot
         result = calibrate_kou_snapshot(snap, theta_0, bounds)
-        
-        # Append the results to our list
-        calib_out.append(result)
-        
-        # IMPORTANT: Update the initial guess for the *next* day ONLY if this run succeeded.
-        # If it failed, we'll just reuse the same `theta_0` for the next day.
+        calib_summary.append(result)
+
+        # If the calibration for the day was successful, calculate and store detailed results
         if result['success']:
-            theta_0 = np.array([
-                result['theta_σ'], 
-                result['theta_ξ'], 
-                result['theta_α1'], 
-                result['theta_α2'],
+            # Reconstruct the optimal theta vector from the result dictionary
+            theta_opt = np.array([
+                result['theta_sigma'],
+                result['theta_xi'],
+                result['theta_alpha1'],
+                result['theta_alpha2'],
                 result['theta_p1']
             ])
-        
-    # --- Save the final results to CSV files ---
+
+            # Extract inputs and get fits 
+            CP, S0, K, tau, _, iv_mkt = extract_inputs_from_df(snap)
+            fitted_price = cos_pricer(CP, S0[0], K, tau, r=0.0, theta=theta_opt)
+            fitted_iv = iv_newton(fitted_price, CP, S0[0], K, tau, r=0.0, sigma_init=iv_mkt)
+
+            # Create a copy of the day's snapshot and add the new columns
+            detailed_snap = snap.copy()
+            detailed_snap['fitted_price'] = fitted_price
+            detailed_snap['fitted_iv'] = fitted_iv
+            detailed_snap['SE_fitted'] = (fitted_iv - iv_mkt)**2
+
+            option_fits.append(detailed_snap)
+
+            # Update the initial guess for the next day (warm start)
+            theta_0 = theta_opt
+
+    # Save the final results to CSV files 
     output_path = '/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Data/'
     os.makedirs(output_path, exist_ok=True)
-    
-    # Save the summary of fits
-    df_calib = pd.DataFrame(calib_out)
-    df_calib.to_csv(os.path.join(output_path, 'kou_calibration_results_final.csv'), index=False)
-    print("\n--- Final Calibration Finished ---")
-    print("Results saved to 'kou_calibration_results_final.csv'")
-    print(df_calib.head())
+
+    # Save the summary of fits (same as your original code)
+    df_calib_summary = pd.DataFrame(calib_summary)
+    summary_filepath = os.path.join(output_path, 'Calibration', 'kou_calibration_summary.csv')
+    df_calib_summary.to_csv(summary_filepath, index=False)
+    print(f"\n--- Calibration Summary Finished ---")
+    print(f"Summary results saved to '{summary_filepath}'")
+    print(df_calib_summary.head())
+
+    # Concatenate all the detailed daily results into a single DataFrame
+    if option_fits:
+        df_detailed_fits = pd.concat(option_fits, ignore_index=True)
+        detailed_filepath = os.path.join(output_path, 'Options', 'kou_per_option_fits.csv')
+        df_detailed_fits.to_csv(detailed_filepath, index=False)
+        print(f"\n--- Detailed Fits Finished ---")
+        print(f"Per-option results saved to '{detailed_filepath}'")
+        print(df_detailed_fits.head())
+    else:
+        print("\nNo successful calibrations to generate detailed fits.")
