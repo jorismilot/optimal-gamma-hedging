@@ -134,7 +134,7 @@ if __name__ == '__main__':
             option_fits.append(detailed_snap)
 
     # Save Results to CSV 
-    output_path = '/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Data/'
+    output_path = '/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Data/ETH'
     os.makedirs(os.path.join(output_path, 'Calibration'), exist_ok=True)
     os.makedirs(os.path.join(output_path, 'Options'), exist_ok=True)
 
