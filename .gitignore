@@ -5,3 +5,5 @@ Data/
 *.json
 *.git 2
 .DS_Store
+COS_Pricers/Data_8am/
+COS_Pricers/Hedging/

@@ -8,15 +8,15 @@ from tqdm import tqdm
 
 i = 1j    # imag unit
 
-def load_0dte_data(file_path='/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/Data/calibration_data/08/btc_08_0dte_data.csv'):
+def load_0dte_data(file_path='/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/Data/calibration_data/08/eth_08_0dte_data.csv'):
     """
-    Load 0DTE option data for BTC from a specified CSV file.
+    Load 0DTE option data for ETH from a specified CSV file.
     """
-    btc_df = pd.read_csv(file_path)
+    eth_df = pd.read_csv(file_path)
 
-    btc_df['time_to_maturity'] = btc_df['time_to_maturity'] / (365 * 24 * 3600)
-    btc_df['timestamp'] = pd.to_datetime(btc_df['timestamp'], utc=True)
-    return btc_df
+    eth_df['time_to_maturity'] = eth_df['time_to_maturity'] / (365 * 24 * 3600)
+    eth_df['timestamp'] = pd.to_datetime(eth_df['timestamp'], utc=True)
+    return eth_df
 
 def filter_otm_calibration(df):
     df['moneyness'] = np.log(df['strike'] / df['spot'])
@@ -87,7 +87,7 @@ def payoff_coefficients_vec(CP, k, a, b):
     return H_k
 
 
-def cos_pricer(CP, S0, K, tau, r, theta, N=512, L=10):
+def cos_pricer(CP, S0, K, tau, r, theta, N=256, L=12):
     K, tau, CP = np.asarray(K), np.asarray(tau), np.asarray(CP)
     log_ratio  = np.log(S0 / K)
     a = (log_ratio - L*np.sqrt(tau))[None, :] # CHECK IF WE SHOULD SET log_ratio = 0.0 
@@ -158,9 +158,9 @@ def calibrate_bates_snapshot(df_snap, theta_0, bounds, r=0.0):
         }     
 
 if __name__ == '__main__':
-    btc_raw = load_0dte_data()
-    btc = filter_otm_calibration(btc_raw) # filter for ATM/OTM
-    grouped = sorted(list(btc.groupby(btc['timestamp'].dt.date)))
+    eth_raw = load_0dte_data()
+    eth = filter_otm_calibration(eth_raw) # filter for ATM/OTM
+    grouped = sorted(list(eth.groupby(eth['timestamp'].dt.date)))
 
     calib_summary = []
     option_fits = []
@@ -205,7 +205,7 @@ if __name__ == '__main__':
             theta_0 = theta_opt
 
     # Save the final results to CSV files 
-    output_path = '/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Data/'
+    output_path = '/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Data_8am/ETH'
     os.makedirs(output_path, exist_ok=True)
 
     # Save the summary of fits (same as your original code)

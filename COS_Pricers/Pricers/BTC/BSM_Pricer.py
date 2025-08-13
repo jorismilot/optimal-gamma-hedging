@@ -9,7 +9,7 @@ from tqdm import tqdm
 i = 1j    # imag unit
 SEC_PER_YEAR = 365 * 24 * 3600 # seconds to years
 
-def load_0dte_data(hour='08'):
+def load_0dte_data(hour):
     """
     Load 0DTE option data for BTC and ETH from CSV files.
     """
@@ -98,65 +98,67 @@ def calibrate_bsm_snapshot(df_snap):
     }
 
 if __name__ == '__main__':
-    btc_raw = load_0dte_data()[0]
-    btc = filter_otm_calibration(btc_raw.dropna(subset=['mark_iv', 'mark_price']))
-    grouped = sorted(list(btc.groupby(btc['timestamp'].dt.date)))
+    hours = ['00', '01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20', '21', '22', '23']
+    for hour in hours:
+        btc_raw = load_0dte_data(hour)[0]
+        btc = filter_otm_calibration(btc_raw.dropna(subset=['mark_iv', 'mark_price']))
+        grouped = sorted(list(btc.groupby(btc['timestamp'].dt.date)))
 
-    # Initialize Result Lists
-    calib_summary = []
-    option_fits = []
+        # Initialize Result Lists
+        calib_summary = []
+        option_fits = []
 
-    print("Starting BSM calibration...")
-    for date, snap in tqdm(grouped, desc='Calibrating BSM per-day'):
-        # Calibrate Snapshot and Store Summary 
-        result = calibrate_bsm_snapshot(snap)
-        # Add the date to the summary dictionary before appending
-        result_with_date = {'date': date, **result}
-        calib_summary.append(result_with_date)
+        print("Starting BSM calibration...")
+        for date, snap in tqdm(grouped, desc='Calibrating BSM per-day'):
+            # Calibrate Snapshot and Store Summary 
+            result = calibrate_bsm_snapshot(snap)
+            # Add the date to the summary dictionary before appending
+            result_with_date = {'date': date, **result}
+            calib_summary.append(result_with_date)
 
-        # Calculate Detailed Fits if Successful
-        if result['success']:
-            sigma_opt = result['theta_sigma']
+            # Calculate Detailed Fits if Successful
+            if result['success']:
+                sigma_opt = result['theta_sigma']
 
-            # Extract inputs needed for pricing
-            CP, S0_vec, K, tau_sec, _, iv_mkt = extract_inputs_from_df(snap)
-            S0 = S0_vec[0]
+                # Extract inputs needed for pricing
+                CP, S0_vec, K, tau_sec, _, iv_mkt = extract_inputs_from_df(snap)
+                S0 = S0_vec[0]
 
-            # Calculate fitted prices and IVs
-            fitted_price = bs_price(CP, S0, K, sigma_opt, tau_sec, r=0.0)
-            fitted_iv = np.full_like(iv_mkt, sigma_opt)
+                # Calculate fitted prices and IVs
+                fitted_price = bs_price(CP, S0, K, sigma_opt, tau_sec, r=0.0)
+                fitted_iv = np.full_like(iv_mkt, sigma_opt)
 
-            # Add results to a copy of the day's snapshot
-            detailed_snap = snap.copy()
-            detailed_snap['fitted_price'] = fitted_price
-            detailed_snap['fitted_iv'] = fitted_iv
-            detailed_snap['SE_fitted'] = (fitted_iv - iv_mkt)**2
-            option_fits.append(detailed_snap)
+                # Add results to a copy of the day's snapshot
+                detailed_snap = snap.copy()
+                detailed_snap['fitted_price'] = fitted_price
+                detailed_snap['fitted_iv'] = fitted_iv
+                detailed_snap['SE_fitted'] = (fitted_iv - iv_mkt)**2
+                option_fits.append(detailed_snap)
 
-    # Save Results to CSV 
-    output_path = '/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Data/ETH'
-    os.makedirs(os.path.join(output_path, 'Calibration'), exist_ok=True)
-    os.makedirs(os.path.join(output_path, 'Options'), exist_ok=True)
+        # Save Results to CSV 
+        output_path = '/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Hedging/Hourly_Results/'
+        os.makedirs(os.path.join(output_path, 'Calibration', f'{hour}'), exist_ok=True)
+        os.makedirs(os.path.join(output_path, 'Options', f'{hour}'), exist_ok=True)
 
-    # Save summary results
-    if calib_summary:
-        df_calib_summary = pd.DataFrame(calib_summary)
-        summary_filepath = os.path.join(output_path, 'Calibration', 'bsm_calibration_summary.csv')
-        df_calib_summary.to_csv(summary_filepath, index=False)
-        print("\n--- Calibration Summary Finished ---")
-        print(f"Summary results saved to '{summary_filepath}'")
-        print(df_calib_summary.head())
-    else:
-        print("\nNo summary results to save.")
+        # Save summary results
+        if calib_summary:
+            df_calib_summary = pd.DataFrame(calib_summary)
+            summary_filepath = os.path.join(output_path, 'Calibration', f'{hour}', f'bsm_calibration_summary_{hour}.csv')
+            df_calib_summary.to_csv(summary_filepath, index=False)
+            print("\n--- Calibration Summary Finished ---")
+            print(f"Summary results saved to '{summary_filepath}'")
+            print(df_calib_summary.head())
+        else:
+            print("\nNo summary results to save.")
 
-    # Save detailed per-option fits
-    if option_fits:
-        df_detailed_fits = pd.concat(option_fits, ignore_index=True)
-        detailed_filepath = os.path.join(output_path, 'Options', 'bsm_per_option_fits.csv')
-        df_detailed_fits.to_csv(detailed_filepath, index=False)
-        print("\n--- Detailed Fits Finished ---")
-        print(f"Per-option results saved to '{detailed_filepath}'")
-        print(df_detailed_fits.head())
-    else:
-        print("\nNo successful calibrations to generate detailed fits.")
+        # Save detailed per-option fits
+        if option_fits:
+            df_detailed_fits = pd.concat(option_fits, ignore_index=True)
+            detailed_filepath = os.path.join(output_path, 'Options', f'{hour}', f'bsm_per_option_fits_{hour}.csv')
+            df_detailed_fits.to_csv(detailed_filepath, index=False)
+            print("\n--- Detailed Fits Finished ---")
+            print(f"Per-option results saved to '{detailed_filepath}'")
+            print(df_detailed_fits.head())
+        else:
+            print("\nNo successful calibrations to generate detailed fits.")
 

@@ -8,8 +8,10 @@ from tqdm import tqdm
 
 i = 1j    # imag unit
 
-def load_0dte_data(file_path='Data/calibration_data/08/btc_08_0dte_data.csv'):
-    btc_df = pd.read_csv(file_path)
+def load_0dte_data(hour):
+    btc_df_path = os.path.join(f'/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/Data/calibration_data/{hour}', f'btc_{hour}_0dte_data.csv')
+    btc_df = pd.read_csv(btc_df_path)
+
     btc_df['time_to_maturity'] = btc_df['time_to_maturity'] / (365 * 24 * 3600)
     btc_df['timestamp'] = pd.to_datetime(btc_df['timestamp'], utc=True)
     return btc_df
@@ -85,7 +87,7 @@ def payoff_coefficients_vec(CP, k, a, b):
     return H_k
 
 # Heston COS pricer
-def cos_pricer(CP, S0, K, tau, r, theta, N=256, L=10):
+def cos_pricer(CP, S0, K, tau, r, theta, N=256, L=12):
     K, tau, CP = np.asarray(K), np.asarray(tau), np.asarray(CP)
     log_ratio  = np.log(S0 / K)
     
@@ -174,77 +176,80 @@ def calibrate_heston_snapshot(df_snap, v0_fixed, theta_0_remaining, bounds_remai
     }
 
 if __name__ == '__main__':
-    btc_raw = load_0dte_data()
-    btc = filter_otm_calibration(btc_raw)
-    grouped = sorted(list(btc.groupby(btc['timestamp'].dt.date)))
+    hours = ['00', '01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20', '21', '22', '23']
+    for hour in hours:
+        btc_raw = load_0dte_data(hour)
+        btc = filter_otm_calibration(btc_raw)
+        grouped = sorted(list(btc.groupby(btc['timestamp'].dt.date)))
 
-    calib_summary = []
-    option_fits = []
+        calib_summary = []
+        option_fits = []
 
-    # Initial guess for all params: [v0, v_bar, gamma, rho]
-    theta_full_0, lb_full, ub_full = MODEL_CFG['heston']
-    
-    # We will optimize [v_bar, gamma, rho]
-    theta_0_remaining = theta_full_0[1:] 
-    bounds_remaining = list(zip(lb_full, ub_full))[1:]
-
-    print("Starting sequential calibration with fixed v0 from ATM IV...")
-    for date, snap in tqdm(grouped, desc='Calibrating per-day heston', unit='day'):
+        # Initial guess for all params: [v0, v_bar, gamma, rho]
+        theta_full_0, lb_full, ub_full = MODEL_CFG['heston']
         
-        # Find ATM IV and set fixed v0 
-        atm_option_idx = snap['moneyness'].abs().idxmin()
-        atm_iv = snap.loc[atm_option_idx, 'mark_iv'] / 100.0
-        v0_fixed = atm_iv**2
-        
-        # Calibrate with the fixed v0 
-        result = calibrate_heston_snapshot(snap, v0_fixed, theta_0_remaining, bounds_remaining)
-        calib_summary.append(result)
+        # We will optimize [v_bar, gamma, rho]
+        theta_0_remaining = theta_full_0[1:] 
+        bounds_remaining = list(zip(lb_full, ub_full))[1:]
 
-        # Process results
-        if result['success']:
-            # 1. Reconstruct the optimal full theta vector from the result dictionary
-            theta_opt_full = np.array([
-                result['theta_v0'],    # The fixed v0
-                result['theta_v_bar'],
-                result['theta_kappa'], 
-                result['theta_gamma'], # Note: your chf_heston uses kappa=0.5, this is vol-of-vol
-                result['theta_rho']
-            ])
+        print("Starting sequential calibration with fixed v0 from ATM IV...")
+        for date, snap in tqdm(grouped, desc='Calibrating per-day heston', unit='day'):
+            
+            # Find ATM IV and set fixed v0 
+            atm_option_idx = snap['moneyness'].abs().idxmin()
+            atm_iv = snap.loc[atm_option_idx, 'mark_iv'] / 100.0
+            v0_fixed = atm_iv**2
+            
+            # Calibrate with the fixed v0 
+            result = calibrate_heston_snapshot(snap, v0_fixed, theta_0_remaining, bounds_remaining)
+            calib_summary.append(result)
 
-            # Extract inputs and get fits 
-            CP, S0, K, tau, _, iv_mkt = extract_inputs_from_df(snap)
-            fitted_price = cos_pricer(CP, S0[0], K, tau, r=0.0, theta=theta_opt_full)
-            fitted_iv = iv_newton(fitted_price, CP, S0[0], K, tau, r=0.0, sigma_init=iv_mkt)
+            # Process results
+            if result['success']:
+                # 1. Reconstruct the optimal full theta vector from the result dictionary
+                theta_opt_full = np.array([
+                    result['theta_v0'],    # The fixed v0
+                    result['theta_v_bar'],
+                    result['theta_kappa'], 
+                    result['theta_gamma'], # Note: your chf_heston uses kappa=0.5, this is vol-of-vol
+                    result['theta_rho']
+                ])
 
-            # Create a copy and store detailed results
-            detailed_snap = snap.copy()
-            detailed_snap['fitted_price'] = fitted_price
-            detailed_snap['fitted_iv'] = fitted_iv
-            detailed_snap['SE_fitted'] = (fitted_iv - iv_mkt)**2
-            option_fits.append(detailed_snap)
+                # Extract inputs and get fits 
+                CP, S0, K, tau, _, iv_mkt = extract_inputs_from_df(snap)
+                fitted_price = cos_pricer(CP, S0[0], K, tau, r=0.0, theta=theta_opt_full)
+                fitted_iv = iv_newton(fitted_price, CP, S0[0], K, tau, r=0.0, sigma_init=iv_mkt)
 
-            # Update the initial guess for the NEXT day's remaining parameters, i.e. warm start
-            theta_0_remaining = theta_opt_full[1:]
+                # Create a copy and store detailed results
+                detailed_snap = snap.copy()
+                detailed_snap['fitted_price'] = fitted_price
+                detailed_snap['fitted_iv'] = fitted_iv
+                detailed_snap['SE_fitted'] = (fitted_iv - iv_mkt)**2
+                option_fits.append(detailed_snap)
 
-    # Save the final results to CSV files 
-    output_path = '/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Data/'
-    os.makedirs(output_path, exist_ok=True)
+                # Update the initial guess for the NEXT day's remaining parameters, i.e. warm start
+                theta_0_remaining = theta_opt_full[1:]
 
-    # Save the summary of fits (same as your original code)
-    df_calib_summary = pd.DataFrame(calib_summary)
-    summary_filepath = os.path.join(output_path, 'Calibration', 'heston_calibration_summary.csv')
-    df_calib_summary.to_csv(summary_filepath, index=False)
-    print(f"\n--- Calibration Summary Finished ---")
-    print(f"Summary results saved to '{summary_filepath}'")
-    print(df_calib_summary.head())
+        # Save the final results to CSV files 
+        output_path = '/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Hedging/Hourly_Results/'
+        os.makedirs(os.path.join(output_path, 'Calibration', f'{hour}'), exist_ok=True)
+        os.makedirs(os.path.join(output_path, 'Options', f'{hour}'), exist_ok=True)
 
-    # Concatenate all the detailed daily results into a single DataFrame
-    if option_fits:
-        df_detailed_fits = pd.concat(option_fits, ignore_index=True)
-        detailed_filepath = os.path.join(output_path, 'Options', 'heston_per_option_fits.csv')
-        df_detailed_fits.to_csv(detailed_filepath, index=False)
-        print(f"\n--- Detailed Fits Finished ---")
-        print(f"Per-option results saved to '{detailed_filepath}'")
-        print(df_detailed_fits.head())
-    else:
-        print("\nNo successful calibrations to generate detailed fits.")
+        # Save the summary of fits (same as your original code)
+        df_calib_summary = pd.DataFrame(calib_summary)
+        summary_filepath = os.path.join(output_path, 'Calibration', f'{hour}', f'heston_calibration_summary_{hour}.csv')
+        df_calib_summary.to_csv(summary_filepath, index=False)
+        print(f"\n--- Calibration Summary Finished ---")
+        print(f"Summary results saved to '{summary_filepath}'")
+        print(df_calib_summary.head())
+
+        # Concatenate all the detailed daily results into a single DataFrame
+        if option_fits:
+            df_detailed_fits = pd.concat(option_fits, ignore_index=True)
+            detailed_filepath = os.path.join(output_path, 'Options', f'{hour}', f'heston_per_option_fits_{hour}.csv')
+            df_detailed_fits.to_csv(detailed_filepath, index=False)
+            print(f"\n--- Detailed Fits Finished ---")
+            print(f"Per-option results saved to '{detailed_filepath}'")
+            print(df_detailed_fits.head())
+        else:
+            print("\nNo successful calibrations to generate detailed fits.")

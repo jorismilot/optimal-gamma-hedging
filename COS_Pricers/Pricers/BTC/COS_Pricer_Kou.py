@@ -9,12 +9,9 @@ from tqdm import tqdm
 
 i = 1j    # imag unit
 
-def load_0dte_data(file_path='/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/Data/calibration_data/08/btc_08_0dte_data.csv'):
-    """
-    Load 0DTE option data for BTC from a specified CSV file.
-    """
-    # Use the provided filename directly
-    btc_df = pd.read_csv(file_path)
+def load_0dte_data(hour):
+    btc_df_path = os.path.join(f'/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/Data/calibration_data/{hour}', f'btc_{hour}_0dte_data.csv')
+    btc_df = pd.read_csv(btc_df_path)
 
     btc_df['time_to_maturity'] = btc_df['time_to_maturity'] / (365 * 24 * 3600)
     btc_df['timestamp'] = pd.to_datetime(btc_df['timestamp'], utc=True)
@@ -90,7 +87,7 @@ def payoff_coefficients_vec(CP, k, a, b):
     H_k = (2.0 / (b - a)) * s * (xi - psi)
     return H_k
 
-def cos_pricer(CP, S0, K, tau, r, theta, N=512, L=10):
+def cos_pricer(CP, S0, K, tau, r, theta, N=256, L=12):
     K, tau, CP = np.asarray(K), np.asarray(tau), np.asarray(CP)
     c1, c2, c4 = kou_cumulants(tau, r, theta)
     log_ratio  = np.log(S0 / K)
@@ -162,68 +159,70 @@ def calibrate_kou_snapshot(df_snap, theta_0, bounds, r=0.0):
     }
 
 if __name__ == '__main__':
-    btc_raw = load_0dte_data()
-    btc = filter_otm_calibration(btc_raw) # filter for ATM/OTM
-    grouped = sorted(list(btc.groupby(btc['timestamp'].dt.date)))
+    hours = ['00', '01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20', '21', '22', '23']
+    for hour in hours:
+        btc_raw = load_0dte_data(hour)
+        btc = filter_otm_calibration(btc_raw) # filter for ATM/OTM
+        grouped = sorted(list(btc.groupby(btc['timestamp'].dt.date)))
 
-    calib_summary = []
-    option_fits = []
+        calib_summary = []
+        option_fits = []
 
-    theta_0, lb, ub = MODEL_CFG['kou']
-    bounds = list(zip(lb, ub))
+        theta_0, lb, ub = MODEL_CFG['kou']
+        bounds = list(zip(lb, ub))
 
-    print("Starting sequential calibration with robust warm starts...")
-    for date, snap in tqdm(grouped, desc='Calibrating per-day kou', unit='day'):
-        # Calibrate the kou model for the current snapshot
-        result = calibrate_kou_snapshot(snap, theta_0, bounds)
-        calib_summary.append(result)
+        print("Starting sequential calibration with robust warm starts...")
+        for date, snap in tqdm(grouped, desc='Calibrating per-day kou', unit='day'):
+            # Calibrate the kou model for the current snapshot
+            result = calibrate_kou_snapshot(snap, theta_0, bounds)
+            calib_summary.append(result)
 
-        # If the calibration for the day was successful, calculate and store detailed results
-        if result['success']:
-            # Reconstruct the optimal theta vector from the result dictionary
-            theta_opt = np.array([
-                result['theta_sigma'],
-                result['theta_xi'],
-                result['theta_alpha1'],
-                result['theta_alpha2'],
-                result['theta_p1']
-            ])
+            # If the calibration for the day was successful, calculate and store detailed results
+            if result['success']:
+                # Reconstruct the optimal theta vector from the result dictionary
+                theta_opt = np.array([
+                    result['theta_sigma'],
+                    result['theta_xi'],
+                    result['theta_alpha1'],
+                    result['theta_alpha2'],
+                    result['theta_p1']
+                ])
 
-            # Extract inputs and get fits 
-            CP, S0, K, tau, _, iv_mkt = extract_inputs_from_df(snap)
-            fitted_price = cos_pricer(CP, S0[0], K, tau, r=0.0, theta=theta_opt)
-            fitted_iv = iv_newton(fitted_price, CP, S0[0], K, tau, r=0.0, sigma_init=iv_mkt)
+                # Extract inputs and get fits 
+                CP, S0, K, tau, _, iv_mkt = extract_inputs_from_df(snap)
+                fitted_price = cos_pricer(CP, S0[0], K, tau, r=0.0, theta=theta_opt)
+                fitted_iv = iv_newton(fitted_price, CP, S0[0], K, tau, r=0.0, sigma_init=iv_mkt)
 
-            # Create a copy of the day's snapshot and add the new columns
-            detailed_snap = snap.copy()
-            detailed_snap['fitted_price'] = fitted_price
-            detailed_snap['fitted_iv'] = fitted_iv
-            detailed_snap['SE_fitted'] = (fitted_iv - iv_mkt)**2
+                # Create a copy of the day's snapshot and add the new columns
+                detailed_snap = snap.copy()
+                detailed_snap['fitted_price'] = fitted_price
+                detailed_snap['fitted_iv'] = fitted_iv
+                detailed_snap['SE_fitted'] = (fitted_iv - iv_mkt)**2
 
-            option_fits.append(detailed_snap)
+                option_fits.append(detailed_snap)
 
-            # Update the initial guess for the next day (warm start)
-            theta_0 = theta_opt
+                # Update the initial guess for the next day (warm start)
+                theta_0 = theta_opt
 
-    # Save the final results to CSV files 
-    output_path = '/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Data/'
-    os.makedirs(output_path, exist_ok=True)
+        # Save the final results to CSV files 
+        output_path = '/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Hedging/Hourly_Results/'
+        os.makedirs(output_path, exist_ok=True)
 
-    # Save the summary of fits (same as your original code)
-    df_calib_summary = pd.DataFrame(calib_summary)
-    summary_filepath = os.path.join(output_path, 'Calibration', 'kou_calibration_summary.csv')
-    df_calib_summary.to_csv(summary_filepath, index=False)
-    print(f"\n--- Calibration Summary Finished ---")
-    print(f"Summary results saved to '{summary_filepath}'")
-    print(df_calib_summary.head())
+        # Save the summary of fits 
+        df_calib_summary = pd.DataFrame(calib_summary)
+        summary_filepath = os.path.join(output_path, 'Calibration', f'{hour}', f'kou_calibration_summary_{hour}.csv')
+        df_calib_summary.to_csv(summary_filepath, index=False)
+        print(f"\n--- Calibration Summary Finished ---")
+        print(f"Summary results saved to '{summary_filepath}'")
+        print(df_calib_summary.head())
 
-    # Concatenate all the detailed daily results into a single DataFrame
-    if option_fits:
-        df_detailed_fits = pd.concat(option_fits, ignore_index=True)
-        detailed_filepath = os.path.join(output_path, 'Options', 'kou_per_option_fits.csv')
-        df_detailed_fits.to_csv(detailed_filepath, index=False)
-        print(f"\n--- Detailed Fits Finished ---")
-        print(f"Per-option results saved to '{detailed_filepath}'")
-        print(df_detailed_fits.head())
-    else:
-        print("\nNo successful calibrations to generate detailed fits.")
+        # Concatenate all the detailed daily results into a single DataFrame
+        if option_fits:
+            df_detailed_fits = pd.concat(option_fits, ignore_index=True)
+            detailed_filepath = os.path.join(output_path, 'Options', f'{hour}', f'kou_per_option_fits_{hour}.csv')
+            df_detailed_fits.to_csv(detailed_filepath, index=False)
+            print(f"\n--- Detailed Fits Finished ---")
+            print(f"Per-option results saved to '{detailed_filepath}'")
+            print(df_detailed_fits.head())
+        else:
+            print("\nNo successful calibrations to generate detailed fits.")
