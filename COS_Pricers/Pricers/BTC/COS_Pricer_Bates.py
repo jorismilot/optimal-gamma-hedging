@@ -112,7 +112,7 @@ MODEL_CFG = {
         # Lower Bounds
         np.array([0.1, 0.01, 0.01, -0.99, 0.01, 4.0, -0.5, 0.01]),
         # Upper Bounds
-        np.array([20.0, 2.0, 2.0, 0.99, 2.0, 45.0, 0.5, 0.6])
+        np.array([20.0, 2.0, 2.0, 0.01, 2.0, 45.0, 0.5, 0.6])
     )
 }
 
@@ -157,7 +157,7 @@ def calibrate_bates_snapshot(df_snap, theta_0, bounds, r=0.0):
         }     
 
 if __name__ == '__main__':
-    hours = ['00', '01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20', '21', '22', '23']
+    hours = ['08']
     for hour in hours:
         btc_raw = load_0dte_data(hour)
         btc = filter_otm_calibration(btc_raw) # filter for ATM/OTM
@@ -206,7 +206,7 @@ if __name__ == '__main__':
                 theta_0 = theta_opt
 
         # Save the final results to CSV files 
-        output_path = '/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Hedging/Hourly_Results/'
+        output_path = '/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Hourly_Results/'
         os.makedirs(os.path.join(output_path, 'Calibration', f'{hour}'), exist_ok=True)
         os.makedirs(os.path.join(output_path, 'Options', f'{hour}'), exist_ok=True)
 

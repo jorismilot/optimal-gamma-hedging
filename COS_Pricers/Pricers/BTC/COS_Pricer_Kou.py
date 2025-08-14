@@ -159,7 +159,7 @@ def calibrate_kou_snapshot(df_snap, theta_0, bounds, r=0.0):
     }
 
 if __name__ == '__main__':
-    hours = ['00', '01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20', '21', '22', '23']
+    hours = ['18', '19', '20', '21', '22', '23']
     for hour in hours:
         btc_raw = load_0dte_data(hour)
         btc = filter_otm_calibration(btc_raw) # filter for ATM/OTM
@@ -205,7 +205,7 @@ if __name__ == '__main__':
                 theta_0 = theta_opt
 
         # Save the final results to CSV files 
-        output_path = '/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Hedging/Hourly_Results/'
+        output_path = '/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/COS_Pricers/Hourly_Results/'
         os.makedirs(output_path, exist_ok=True)
 
         # Save the summary of fits 
