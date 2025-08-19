@@ -5,7 +5,6 @@ import os
 import scipy.stats as st
 import scipy.optimize as optimize
 from tqdm import tqdm  
-# We will remove joblib as we are switching to a sequential approach
 
 i = 1j    # imag unit
 
@@ -35,7 +34,7 @@ def extract_inputs_from_df(df):
         df['mark_iv'].values / 100.0  
         )
 
-# Black-Scholes formulas (no changes needed)
+# Black-Scholes formulas
 def bs_price(CP, S0, K, sigma, tau, r):
     tau = np.asarray(tau, dtype=float); CP  = np.asarray(CP, dtype=str)
     d1  = (np.log(S0 / K) + (r + 0.5 * sigma**2) * tau) / (sigma * np.sqrt(tau))
@@ -48,7 +47,7 @@ def bs_vega(S0, K, sigma, tau, r):
     d1  = (np.log(S0 / K) + (r + 0.5 * sigma**2) * tau) / (sigma * np.sqrt(tau))
     return S0 * st.norm.pdf(d1) * np.sqrt(tau)
 
-# --- COS Pricing Mechanism ---
+# COS Pricing Mechanism 
 def chf_kou(u, r, tau, theta):
     sigma, xi, alpha1, alpha2, p1 = theta
     p2 = 1 - p1
@@ -97,7 +96,7 @@ def cos_pricer(CP, S0, K, tau, r, theta, N=256, L=12):
     u = k * np.pi / (b - a)
     phi = chf_kou(u, r, tau, theta)
     
-    # Pass k directly, not k[None,:]. Helper expects a column vector.
+    # Pass k directly
     H_k = payoff_coefficients_vec(CP[None, :], k, a, b)
     
     w = np.real(phi * np.exp(-1j * u * (a - log_ratio[None, :])))
@@ -105,7 +104,7 @@ def cos_pricer(CP, S0, K, tau, r, theta, N=256, L=12):
     prices = np.exp(-r * tau) * K * np.sum(w * H_k, axis=0)
     return prices.astype(float)
 
-# --- Calibration Mechanism ---
+# Calibration Mechanism
 MODEL_CFG = {
     'kou': (
         # Initial Guess: [sigma, xi, alpha1, alpha2, p1]
@@ -119,7 +118,6 @@ MODEL_CFG = {
     )
 }
 
-# Here used: Enhanced numerical stability
 def iv_newton(price, CP, S0, K, tau, r, sigma_init=0.5, tol=1e-10, it=500):
     sigma = np.full_like(price, sigma_init, dtype=float)
     for _ in range(it):
@@ -134,7 +132,8 @@ def rmse_iv(S0, K, tau, CP, iv_mkt, theta, r=0.0):
     pr_model = cos_pricer(CP, S0, K, tau, r, theta)
     iv_model = iv_newton(pr_model, CP, S0, K, tau, r, sigma_init=np.nan_to_num(iv_mkt, nan=0.5))
     # Return a large penalty if inversion fails completely
-    if np.all(np.isnan(iv_model)): return 1e6
+    if np.all(np.isnan(iv_model)): 
+        return 1e6
     return 100 * np.sqrt(np.nanmean((iv_model - iv_mkt)**2))
 
 def calibrate_kou_snapshot(df_snap, theta_0, bounds, r=0.0):
@@ -143,7 +142,6 @@ def calibrate_kou_snapshot(df_snap, theta_0, bounds, r=0.0):
     
     loss = lambda th: rmse_iv(S0, K, tau, CP, iv_mkt, th, r)
     
-    # More robust optimizer settings
     res  = optimize.minimize(loss, theta_0,
                              bounds=bounds,
                              method='L-BFGS-B',

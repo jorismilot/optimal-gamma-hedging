@@ -91,8 +91,8 @@ def cos_pricer(CP, S0, K, tau, r, theta, N=256, L=12):
     K, tau, CP = np.asarray(K), np.asarray(tau), np.asarray(CP)
     log_ratio  = np.log(S0 / K)
     
-    a = (log_ratio - L*np.sqrt(tau))[None, :] # TO DO: SHOULD THIS BE 0 OR log_ratio?
-    b = (log_ratio + L*np.sqrt(tau))[None, :] # TO DO: SHOULD THIS BE 0 OR log_ratio?
+    a = (log_ratio - L*np.sqrt(tau))[None, :] 
+    b = (log_ratio + L*np.sqrt(tau))[None, :] 
     
     k = np.arange(N, dtype=float)[:, None]
     u = k * np.pi / (b - a)
@@ -111,7 +111,7 @@ def cos_pricer(CP, S0, K, tau, r, theta, N=256, L=12):
 MODEL_CFG = {
     'heston': (
         # Parameters: [v0, v_bar, kappa, gamma, rho] # Skip kappa as it has the same effect as gamma
-        np.array([2.00, 2.00, 0.3, 0.5, -0.25]),  # initial guess
+        np.array([2.00, 2.00, 0.5, 0.5, -0.25]),  # initial guess
         np.array([0.001, 0.01, 0.01, 3, -0.999]),  # lower bounds
         np.array([3.0,   7.0, 12.0, 15,  0.00])   # upper bounds
     )
@@ -206,12 +206,12 @@ if __name__ == '__main__':
 
             # Process results
             if result['success']:
-                # 1. Reconstruct the optimal full theta vector from the result dictionary
+                # Reconstruct the optimal full theta vector from the result dictionary
                 theta_opt_full = np.array([
                     result['theta_v0'],    # The fixed v0
                     result['theta_v_bar'],
                     result['theta_kappa'], 
-                    result['theta_gamma'], # Note: your chf_heston uses kappa=0.5, this is vol-of-vol
+                    result['theta_gamma'],
                     result['theta_rho']
                 ])
 
@@ -227,7 +227,7 @@ if __name__ == '__main__':
                 detailed_snap['SE_fitted'] = (fitted_iv - iv_mkt)**2
                 option_fits.append(detailed_snap)
 
-                # Update the initial guess for the NEXT day's remaining parameters, i.e. warm start
+                # Update the initial guess for the next day's remaining parameters, i.e. warm start
                 theta_0_remaining = theta_opt_full[1:]
 
         # Save the final results to CSV files 

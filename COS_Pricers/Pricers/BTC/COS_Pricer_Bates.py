@@ -89,8 +89,8 @@ def payoff_coefficients_vec(CP, k, a, b):
 def cos_pricer(CP, S0, K, tau, r, theta, N=256, L=12):
     K, tau, CP = np.asarray(K), np.asarray(tau), np.asarray(CP)
     log_ratio  = np.log(S0 / K)
-    a = (log_ratio - L*np.sqrt(tau))[None, :] # CHECK IF WE SHOULD SET log_ratio = 0.0 
-    b = (log_ratio + L*np.sqrt(tau))[None, :] # CHECK IF WE SHOULD SET log_ratio = 0.0 
+    a = (log_ratio - L*np.sqrt(tau))[None, :]  
+    b = (log_ratio + L*np.sqrt(tau))[None, :]  
     k = np.arange(N, dtype=float)[:, None] 
     u = k * np.pi / (b - a)
     phi = chf_bates(u, r, tau, theta)
@@ -121,7 +121,7 @@ def iv_newton(price, CP, S0, K, tau, r, sigma_init=0.5, tol=1e-10, it=300):
     for _ in range(it):
         diff = bs_price(CP, S0, K, sigma, tau, r) - price
         vega = bs_vega(S0, K, sigma, tau, r)
-        sigma -= diff / np.where(vega > 1e-10, vega, np.inf) # Lower vega threshold
+        sigma -= diff / np.where(vega > 1e-10, vega, np.inf) 
         if np.all(np.abs(diff) < tol): 
             break
     sigma = np.where((sigma > 0) & (sigma < 5), sigma, np.nan)
@@ -210,7 +210,7 @@ if __name__ == '__main__':
         os.makedirs(os.path.join(output_path, 'Calibration', f'{hour}'), exist_ok=True)
         os.makedirs(os.path.join(output_path, 'Options', f'{hour}'), exist_ok=True)
 
-        # Save the summary of fits (same as your original code)
+        # Save the summary of fits 
         df_calib_summary = pd.DataFrame(calib_summary)
         summary_filepath = os.path.join(output_path, 'Calibration', f'{hour}', f'bates_calibration_summary_{hour}.csv')
         df_calib_summary.to_csv(summary_filepath, index=False)

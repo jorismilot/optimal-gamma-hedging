@@ -9,9 +9,6 @@ from tqdm import tqdm
 i = 1j    # imag unit
 
 def load_0dte_data(file_path='/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/Data/calibration_data/08/eth_08_0dte_data.csv'):
-    """
-    Load 0DTE option data for ETH from a specified CSV file.
-    """
     eth_df = pd.read_csv(file_path)
 
     eth_df['time_to_maturity'] = eth_df['time_to_maturity'] / (365 * 24 * 3600)
@@ -90,8 +87,8 @@ def payoff_coefficients_vec(CP, k, a, b):
 def cos_pricer(CP, S0, K, tau, r, theta, N=256, L=12):
     K, tau, CP = np.asarray(K), np.asarray(tau), np.asarray(CP)
     log_ratio  = np.log(S0 / K)
-    a = (log_ratio - L*np.sqrt(tau))[None, :] # CHECK IF WE SHOULD SET log_ratio = 0.0 
-    b = (log_ratio + L*np.sqrt(tau))[None, :] # CHECK IF WE SHOULD SET log_ratio = 0.0 
+    a = (log_ratio - L*np.sqrt(tau))[None, :] 
+    b = (log_ratio + L*np.sqrt(tau))[None, :] 
     k = np.arange(N, dtype=float)[:, None] 
     u = k * np.pi / (b - a)
     phi = chf_bates(u, r, tau, theta)

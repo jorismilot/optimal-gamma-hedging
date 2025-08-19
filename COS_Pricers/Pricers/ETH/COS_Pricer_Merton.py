@@ -10,9 +10,6 @@ from joblib import Parallel, delayed
 i = 1j    # imag unit
 
 def load_0dte_data(file_path='/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/Data/calibration_data/08/eth_08_0dte_data.csv'):
-    """
-    Load 0DTE option data for ETH from a specified CSV file.
-    """
     eth_df = pd.read_csv(file_path)
 
     eth_df['time_to_maturity'] = eth_df['time_to_maturity'] / (365 * 24 * 3600)
@@ -175,7 +172,7 @@ if __name__ == '__main__':
 
         # If the calibration for the day was successful, calculate and store detailed results
         if result['success']:
-            # 1. Reconstruct the optimal theta vector from the result dictionary
+            # Reconstruct the optimal theta vector from the result dictionary
             theta_opt = np.array([
                 result['theta_sigma'],
                 result['theta_xi'],

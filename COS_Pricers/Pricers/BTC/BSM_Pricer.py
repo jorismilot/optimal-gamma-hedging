@@ -7,13 +7,8 @@ import scipy.optimize as optimize
 from tqdm import tqdm
 
 i = 1j    # imag unit
-SEC_PER_YEAR = 365 * 24 * 3600 # seconds to years
 
 def load_0dte_data(hour):
-    """
-    Load 0DTE option data for BTC and ETH from CSV files.
-    """
-    # Using your local path structure
     btc_df_path = os.path.join(f'/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/Data/calibration_data/{hour}', f'btc_{hour}_0dte_data.csv')
     eth_df_path = os.path.join(f'/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/Data/calibration_data/{hour}', f'eth_{hour}_0dte_data.csv')
     
@@ -26,8 +21,6 @@ def load_0dte_data(hour):
     return btc_df, eth_df
 
 def filter_otm_calibration(df):
-    """Filters a dataframe to keep only ATM/OTM options and remove duplicate strikes."""
-    # Ensure 'moneyness' is calculated
     if 'moneyness' not in df.columns:
         df['moneyness'] = np.log(df['strike'] / df['spot'])
 
@@ -44,7 +37,7 @@ def extract_inputs_from_df(df):
         df['opt_type'].values,
         df['spot'].values,
         df['strike'].values,        
-        df['time_to_maturity'].values, # This is already in seconds from the file
+        df['time_to_maturity'].values, 
         df['mark_price'].values,
         df['mark_iv'].values / 100.0  
         )
@@ -53,7 +46,7 @@ def extract_inputs_from_df(df):
 def bs_price(CP, S0, K, sigma, tau_sec, r):
     """Vectorised BS call/put price. tau_sec is time‑to‑expiry in seconds."""
     with np.errstate(all='ignore'):
-        tau = np.asarray(tau_sec, dtype=float) / SEC_PER_YEAR # years
+        tau = np.asarray(tau_sec, dtype=float) / (365 * 24 * 3600) # years
         CP  = np.asarray(CP, dtype=str)
         d1  = (np.log(S0 / K) + (r + 0.5 * sigma**2) * tau) / (sigma * np.sqrt(tau))
         d2  = d1 - sigma * np.sqrt(tau)
@@ -66,10 +59,6 @@ def bs_price(CP, S0, K, sigma, tau_sec, r):
 
 # Calibration Code 
 def calibration_filter(df):
-    """
-    Filters a dataframe to keep only OTM options and remove duplicate strikes.
-    Assumes 'moneyness' and 'date' columns already exist.
-    """
     # Filter out ITM options
     conditions = ((df['opt_type'] == 'call') & (df['moneyness'] < 0.0)) | \
                  ((df['opt_type'] == 'put')  & (df['moneyness'] > 0.0))
@@ -80,9 +69,6 @@ def calibration_filter(df):
     return df_filtered
 
 def calibrate_bsm_snapshot(df_snap):
-    """
-    Calibrates a single best-fit sigma for the BSM model against the daily IV surface.
-    """
     _, _, _, _, _, iv_mkt = extract_inputs_from_df(df_snap)
     loss = lambda sigma: 100 * np.sqrt(np.mean((sigma - iv_mkt)**2))
     sigma_0 = np.mean(iv_mkt)
@@ -94,7 +80,7 @@ def calibrate_bsm_snapshot(df_snap):
         'iv_rmse': res.fun,
         'n_strk':  len(df_snap),
         'success': res.success,
-        'message': str(res.message) # Ensure message is a string
+        'message': str(res.message) 
     }
 
 if __name__ == '__main__':
@@ -112,7 +98,6 @@ if __name__ == '__main__':
         for date, snap in tqdm(grouped, desc='Calibrating BSM per-day'):
             # Calibrate Snapshot and Store Summary 
             result = calibrate_bsm_snapshot(snap)
-            # Add the date to the summary dictionary before appending
             result_with_date = {'date': date, **result}
             calib_summary.append(result_with_date)
 

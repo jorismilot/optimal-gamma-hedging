@@ -7,27 +7,19 @@ import scipy.optimize as optimize
 from tqdm import tqdm
 
 i = 1j    # imag unit
-SEC_PER_YEAR = 365 * 24 * 3600 # seconds to years
 
 def load_0dte_data(hour='08'):
-    """
-    Load 0DTE option data for BTC and ETH from CSV files.
-    """
-    # Using your local path structure
     btc_df_path = os.path.join(f'/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/Data/calibration_data/{hour}', f'btc_{hour}_0dte_data.csv')
     eth_df_path = os.path.join(f'/Users/joris/Documents/Master QF/Thesis/optimal-gamma-hedging/Data/calibration_data/{hour}', f'eth_{hour}_0dte_data.csv')
     
     btc_df = pd.read_csv(btc_df_path)
     eth_df = pd.read_csv(eth_df_path)
 
-    # Convert the timestamps to UTC 
     btc_df['timestamp'] = pd.to_datetime(btc_df['timestamp'], utc=True)
     eth_df['timestamp'] = pd.to_datetime(eth_df['timestamp'], utc=True)
     return btc_df, eth_df
 
 def filter_otm_calibration(df):
-    """Filters a dataframe to keep only ATM/OTM options and remove duplicate strikes."""
-    # Ensure 'moneyness' is calculated
     if 'moneyness' not in df.columns:
         df['moneyness'] = np.log(df['strike'] / df['spot'])
 
@@ -44,16 +36,15 @@ def extract_inputs_from_df(df):
         df['opt_type'].values,
         df['spot'].values,
         df['strike'].values,        
-        df['time_to_maturity'].values, # This is already in seconds from the file
+        df['time_to_maturity'].values,
         df['mark_price'].values,
         df['mark_iv'].values / 100.0  
         )
 
 # Black-Scholes Prices 
 def bs_price(CP, S0, K, sigma, tau_sec, r):
-    """Vectorised BS call/put price. tau_sec is time‑to‑expiry in seconds."""
     with np.errstate(all='ignore'):
-        tau = np.asarray(tau_sec, dtype=float) / SEC_PER_YEAR # years
+        tau = np.asarray(tau_sec, dtype=float) / (365 * 24 * 3600) # years
         CP  = np.asarray(CP, dtype=str)
         d1  = (np.log(S0 / K) + (r + 0.5 * sigma**2) * tau) / (sigma * np.sqrt(tau))
         d2  = d1 - sigma * np.sqrt(tau)
@@ -66,10 +57,6 @@ def bs_price(CP, S0, K, sigma, tau_sec, r):
 
 # Calibration Code 
 def calibration_filter(df):
-    """
-    Filters a dataframe to keep only OTM options and remove duplicate strikes.
-    Assumes 'moneyness' and 'date' columns already exist.
-    """
     # Filter out ITM options
     conditions = ((df['opt_type'] == 'call') & (df['moneyness'] < 0.0)) | \
                  ((df['opt_type'] == 'put')  & (df['moneyness'] > 0.0))
